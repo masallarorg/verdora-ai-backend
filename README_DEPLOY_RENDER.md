@@ -1,52 +1,44 @@
-# Verdora AI Backend - Render Deploy
+# Verdora AI Backend v9.3 - Render Deploy
 
-Bu klasör FastAPI + OpenAI görüntü analizi backend'idir.
+Bu sürüm OpenAI görüntü analizinde `application/octet-stream` MIME hatasını düzeltir.
 
-## Lokal test
+## Render ayarları
 
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
+Build Command:
+
+```bash
 pip install -r requirements.txt
-copy .env.example .env
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-`.env` içine gerçek anahtar yaz:
+Start Command:
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+Environment Variables:
 
 ```env
-OPENAI_API_KEY=sk-...
+PYTHON_VERSION=3.12.11
+OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_VISION_MODEL=gpt-4o-mini
 ```
 
-Kontrol:
+## Kontrol
 
 ```text
-http://localhost:8000/health
+https://SENIN-RENDER-URL/health
 ```
 
-## Render ayarları
+`openai_enabled: true` görünmeli.
 
-- Build Command: `pip install -r requirements.txt`
-- Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- Environment Variables:
-  - `OPENAI_API_KEY`: gerçek OpenAI API key
-  - `OPENAI_MODEL`: `gpt-4o-mini`
-  - `OPENAI_VISION_MODEL`: `gpt-4o-mini`
-
-Render URL örneği:
-
-```text
-https://verdora-ai-backend.onrender.com
-```
-
-Flutter build/run içinde:
+## Güncelleme
 
 ```powershell
---dart-define=AI_BASE_URL=https://verdora-ai-backend.onrender.com
+git add .
+git commit -m "Fix OpenAI image MIME handling"
+git push
 ```
 
-## Önemli
-
-OpenAI key yoksa backend sahte bitki sonucu döndürmez. `/health` içinde `openai_enabled: true` görünmelidir.
+Render'da: Manual Deploy -> Clear build cache & deploy.

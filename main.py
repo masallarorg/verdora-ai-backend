@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-app = FastAPI(title="Verdora AI Backend", version="0.9.0-openai")
+app = FastAPI(title="Verdora AI Backend", version="0.9.3-openai")
 
 app.add_middleware(
     CORSMiddleware,
@@ -108,6 +108,34 @@ def _require_openai_key() -> str:
     return api_key
 
 
+
+
+def _detect_image_mime(image_bytes: bytes, supplied_mime: str | None = None) -> str:
+    """OpenAI image_url data URI sadece gerçek image MIME kabul eder.
+    Telefon/Flutter bazen multipart content-type olarak application/octet-stream gönderir;
+    bu durumda dosya imzasından MIME belirlenir.
+    """
+    mime = (supplied_mime or '').split(';')[0].strip().lower()
+    supported = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'}
+    if mime in supported:
+        return 'image/jpeg' if mime == 'image/jpg' else mime
+
+    head = image_bytes[:16]
+    if head.startswith(b'\xff\xd8\xff'):
+        return 'image/jpeg'
+    if head.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image/png'
+    if head[:4] == b'RIFF' and head[8:12] == b'WEBP':
+        return 'image/webp'
+    if head.startswith((b'GIF87a', b'GIF89a')):
+        return 'image/gif'
+
+    raise HTTPException(
+        status_code=400,
+        detail='Fotoğraf biçimi okunamadı. Lütfen kamera ile yeni bir JPG/PNG fotoğraf çekip tekrar dene.',
+    )
+
+
 def _normalize_knowledge(data: dict[str, Any], plant_name: str) -> PlantKnowledge:
     knowledge = data.get("knowledge") if isinstance(data.get("knowledge"), dict) else data
 
@@ -181,7 +209,8 @@ async def _analyze_with_openai(image_bytes: bytes, mime_type: str) -> PlantDiagn
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         model = os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
         encoded = base64.b64encode(image_bytes).decode("utf-8")
-        data_uri = f"data:{mime_type or 'image/jpeg'};base64,{encoded}"
+        safe_mime_type = _detect_image_mime(image_bytes, mime_type)
+        data_uri = f"data:{safe_mime_type};base64,{encoded}"
         response = client.responses.create(
             model=model,
             input=[
@@ -216,7 +245,7 @@ async def _analyze_with_openai(image_bytes: bytes, mime_type: str) -> PlantDiagn
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"OpenAI gerçek sonuç üretemedi: {exc}") from exc
+        raise HTTPException(status_code=502, detail="Fotoğraf gerçek analiz için işlenemedi. Lütfen bitkiyi daha net, iyi ışıkta ve tek karede göstererek tekrar dene.") from exc
 
 
 def _notification_content(is_premium: bool, plant_name: str | None) -> tuple[str, str]:
