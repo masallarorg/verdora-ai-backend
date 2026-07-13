@@ -136,6 +136,51 @@ def _detect_image_mime(image_bytes: bytes, supplied_mime: str | None = None) -> 
     )
 
 
+
+def _localized_plant_name(raw_name: str, scientific_name: str | None = None) -> str:
+    combined = f"{raw_name} {scientific_name or ''}".lower()
+    mapping = {
+        'monstera deliciosa': 'Deve tabanı (Monstera deliciosa)',
+        'monstera': 'Deve tabanı (Monstera)',
+        'spathiphyllum': 'Barış çiçeği (Spathiphyllum)',
+        'peace lily': 'Barış çiçeği (Spathiphyllum)',
+        'epipremnum aureum': 'Salon sarmaşığı / Pothos (Epipremnum aureum)',
+        'pothos': 'Salon sarmaşığı / Pothos (Epipremnum aureum)',
+        'ficus elastica': 'Kauçuk bitkisi (Ficus elastica)',
+        'ficus': 'Ficus türü (Ficus)',
+        'sansevieria': 'Paşa kılıcı (Sansevieria)',
+        'dracaena trifasciata': 'Paşa kılıcı (Dracaena trifasciata)',
+        'zamioculcas': 'Zamia / ZZ bitkisi (Zamioculcas zamiifolia)',
+        'zz plant': 'Zamia / ZZ bitkisi (Zamioculcas zamiifolia)',
+        'chamaedorea': 'Dağ palmiyesi (Chamaedorea elegans)',
+        'areca': 'Areka palmiyesi (Dypsis lutescens)',
+        'dypsis lutescens': 'Areka palmiyesi (Dypsis lutescens)',
+        'calathea': 'Dua çiçeği (Calathea)',
+        'maranta': 'Dua çiçeği (Maranta)',
+        'aloe vera': 'Aloe vera (Aloe vera)',
+        'cactus': 'Kaktüs (Cactaceae)',
+        'cactaceae': 'Kaktüs (Cactaceae)',
+        'orchid': 'Orkide (Orchidaceae)',
+        'phalaenopsis': 'Orkide (Phalaenopsis)',
+        'chlorophytum': 'Kurdele çiçeği (Chlorophytum comosum)',
+    }
+    for key, value in mapping.items():
+        if key in combined:
+            return value
+    raw = raw_name.strip()
+    if not raw:
+        return 'Olası iç mekân bitkisi'
+    lowered = raw.lower()
+    if lowered in {'net değil', 'tanımlanamayan bitki', 'net tanımlanamadı'}:
+        return 'Olası iç mekân bitkisi'
+    # Eğer AI sadece Latin ad verdiyse kullanıcıya olası ifadesiyle göster.
+    parts = raw.split()
+    looks_latin = len(parts) >= 2 and parts[0][:1].isupper() and parts[1][:1].islower()
+    if looks_latin and '(' not in raw:
+        return f'Olası: {raw}'
+    return raw
+
+
 def _normalize_knowledge(data: dict[str, Any], plant_name: str) -> PlantKnowledge:
     knowledge = data.get("knowledge") if isinstance(data.get("knowledge"), dict) else data
 
@@ -172,20 +217,20 @@ def _normalize_knowledge(data: dict[str, Any], plant_name: str) -> PlantKnowledg
 
 PLANT_ANALYSIS_PROMPT = """
 Sen Verdora AI bitki tanıma ve bakım asistanısın. Verilen görselleri birlikte analiz et ve SADECE geçerli JSON döndür.
-ÖNCELİK: Görselde bir bitki görünüyorsa tür adı mutlaka üret. plant_name alanı boş kalamaz.
-Kesin emin değilsen plant_name alanında "Olası: Monstera deliciosa" gibi en olası türü yaz ve confidence değerini düşür.
-Sadece görüntüde gerçekten bitki seçilemiyorsa "Tanımlanamayan bitki" yaz.
+ÖNCELİK: Görselde bir bitki görünüyorsa tür adı mutlaka üret. plant_name alanı boş kalamaz ve kullanıcıya önce Türkçe ad gösterilmelidir.
+Kesin emin değilsen plant_name alanında "Olası: Deve tabanı (Monstera deliciosa)" gibi Türkçe + bilimsel ad yaz ve confidence değerini düşür.
+Sadece görüntüde gerçekten bitki seçilemiyorsa "Tanımlanamayan bitki" yaz; bitki görünüyorsa asla yalnızca Latin ad veya yalnızca "Net değil" yazma.
 Birden fazla görsel varsa yaprak, genel görünüm, saksı ve toprak bilgisini birlikte değerlendir.
 JSON şeması:
 {
-  "plant_name": "Türün Türkçe veya yaygın adı ya da Olası: ...",
+  "plant_name": "Türkçe yaygın ad + parantez içinde bilimsel ad, örn: Deve tabanı (Monstera deliciosa)",
   "confidence": 0.0-1.0,
   "health_score": 0-100,
   "summary": "Tür, sağlık ve gözlenen belirti özeti Türkçe",
   "detected_issues": [{"label":"belirti", "severity":"low|medium|high", "confidence":0.0-1.0, "description":"kısa açıklama"}],
   "recommended_actions": ["kısa bakım adımı"],
   "knowledge": {
-    "scientificName":"bilimsel ad veya olası bilimsel ad",
+    "scientificName":"bilimsel ad",
     "family":"familya",
     "origin":"köken",
     "whatItDoes":"ne işe yarar/dekoratif veya kullanım açıklaması",
@@ -200,7 +245,7 @@ JSON şeması:
 }
 Profesyonel algoritma gibi davran: tür güveni, yaprak şekli, damar yapısı, yaprak rengi, leke dağılımı, solma, sararma, kahverengi uç, gövde duruşu, toprak görünümü, saksı drenajı, ışık koşulu ve fotoğraf kalitesini birlikte değerlendir.
 health_score sadece hastalık değil; bakım riski, gözlenen stres ve fotoğraf kalitesine göre dengeli olmalı.
-Kullanıcıyı yönlendiren, premium kalitesinde kısa ama zengin bakım planı üret.
+Premium olmayan kullanıcıya bile bitkinin durumu, yapılacak bakım adımları, riskler ve faydalar yeterince açık verilmelidir. Premium farkı; otomatik takvim, agresif bildirim, daha sık kontrol ve gelişim hedefidir. Kullanıcıyı yönlendiren, premium kalitesinde kısa ama zengin bakım planı üret.
 İnsan sağlığı veya tıbbi tavsiye verme; yalnızca bitki bakım rehberi olarak konuş.
 """
 
@@ -244,6 +289,8 @@ async def _analyze_with_openai_images(images: list[tuple[bytes, str]]) -> PlantD
         plant_name = str(data.get("plant_name", "")).strip()
         if not plant_name:
             raise ValueError("AI plant_name alanı boş döndü")
+        knowledge = _normalize_knowledge(data, plant_name)
+        plant_name = _localized_plant_name(plant_name, knowledge.scientificName)
         return PlantDiagnosisResponse(
             plant_name=plant_name,
             confidence=float(max(0, min(1, float(data.get("confidence", 0.0))))),
@@ -252,7 +299,7 @@ async def _analyze_with_openai_images(images: list[tuple[bytes, str]]) -> PlantD
             detected_issues=issues,
             recommended_actions=[str(item) for item in data.get("recommended_actions", []) if str(item).strip()],
             next_photo_check_at=_health_check_interval(score, len(issues)),
-            knowledge=_normalize_knowledge(data, plant_name),
+            knowledge=knowledge,
         )
     except HTTPException:
         raise
