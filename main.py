@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-app = FastAPI(title="Verdora AI Backend", version="0.9.3-openai")
+app = FastAPI(title="Verdora AI Backend", version="0.9.4-openai-multiphoto")
 
 app.add_middleware(
     CORSMiddleware,
@@ -171,19 +171,22 @@ def _normalize_knowledge(data: dict[str, Any], plant_name: str) -> PlantKnowledg
 
 
 PLANT_ANALYSIS_PROMPT = """
-Sen Verdora AI bitki tanıma ve bakım asistanısın. Fotoğrafı analiz et ve SADECE geçerli JSON döndür.
-Ezbere aynı bitkiyi yazma. Fotoğraf net değilse confidence değerini düşür ve plant_name alanına "Net tanımlanamadı" yaz.
+Sen Verdora AI bitki tanıma ve bakım asistanısın. Verilen görselleri birlikte analiz et ve SADECE geçerli JSON döndür.
+ÖNCELİK: Görselde bir bitki görünüyorsa tür adı mutlaka üret. plant_name alanı boş kalamaz.
+Kesin emin değilsen plant_name alanında "Olası: Monstera deliciosa" gibi en olası türü yaz ve confidence değerini düşür.
+Sadece görüntüde gerçekten bitki seçilemiyorsa "Tanımlanamayan bitki" yaz.
+Birden fazla görsel varsa yaprak, genel görünüm, saksı ve toprak bilgisini birlikte değerlendir.
 JSON şeması:
 {
-  "plant_name": "Türün Türkçe veya yaygın adı",
+  "plant_name": "Türün Türkçe veya yaygın adı ya da Olası: ...",
   "confidence": 0.0-1.0,
   "health_score": 0-100,
   "summary": "Tür, sağlık ve gözlenen belirti özeti Türkçe",
   "detected_issues": [{"label":"belirti", "severity":"low|medium|high", "confidence":0.0-1.0, "description":"kısa açıklama"}],
   "recommended_actions": ["kısa bakım adımı"],
   "knowledge": {
-    "scientificName":"bilimsel ad veya Net değil",
-    "family":"familya veya Net değil",
+    "scientificName":"bilimsel ad veya olası bilimsel ad",
+    "family":"familya",
     "origin":"köken",
     "whatItDoes":"ne işe yarar/dekoratif veya kullanım açıklaması",
     "benefits":["fayda 1", "fayda 2", "fayda 3"],
@@ -195,22 +198,31 @@ JSON şeması:
     "proTips":["profesyonel ipucu 1", "profesyonel ipucu 2"]
   }
 }
-Profesyonel algoritma gibi davran: tür güveni, yaprak rengi, leke dağılımı, solma, sararma, kahverengi uç, gövde duruşu, toprak görünümü, ışık koşulu ve fotoğraf kalitesini birlikte değerlendir.
+Profesyonel algoritma gibi davran: tür güveni, yaprak şekli, damar yapısı, yaprak rengi, leke dağılımı, solma, sararma, kahverengi uç, gövde duruşu, toprak görünümü, saksı drenajı, ışık koşulu ve fotoğraf kalitesini birlikte değerlendir.
 health_score sadece hastalık değil; bakım riski, gözlenen stres ve fotoğraf kalitesine göre dengeli olmalı.
+Kullanıcıyı yönlendiren, premium kalitesinde kısa ama zengin bakım planı üret.
 İnsan sağlığı veya tıbbi tavsiye verme; yalnızca bitki bakım rehberi olarak konuş.
 """
 
 
-async def _analyze_with_openai(image_bytes: bytes, mime_type: str) -> PlantDiagnosisResponse:
+def _input_images_payload(images: list[tuple[bytes, str]]) -> list[dict[str, str]]:
+    payload: list[dict[str, str]] = []
+    for image_bytes, mime_type in images:
+        encoded = base64.b64encode(image_bytes).decode("utf-8")
+        safe_mime_type = _detect_image_mime(image_bytes, mime_type)
+        payload.append({"type": "input_image", "image_url": f"data:{safe_mime_type};base64,{encoded}"})
+    return payload
+
+
+async def _analyze_with_openai_images(images: list[tuple[bytes, str]]) -> PlantDiagnosisResponse:
     _require_openai_key()
+    if not images:
+        raise HTTPException(status_code=400, detail="En az bir fotoğraf gerekli.")
     try:
         from openai import OpenAI
 
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         model = os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-        encoded = base64.b64encode(image_bytes).decode("utf-8")
-        safe_mime_type = _detect_image_mime(image_bytes, mime_type)
-        data_uri = f"data:{safe_mime_type};base64,{encoded}"
         response = client.responses.create(
             model=model,
             input=[
@@ -218,7 +230,7 @@ async def _analyze_with_openai(image_bytes: bytes, mime_type: str) -> PlantDiagn
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": PLANT_ANALYSIS_PROMPT},
-                        {"type": "input_image", "image_url": data_uri},
+                        *_input_images_payload(images),
                     ],
                 }
             ],
@@ -245,7 +257,11 @@ async def _analyze_with_openai(image_bytes: bytes, mime_type: str) -> PlantDiagn
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail="Fotoğraf gerçek analiz için işlenemedi. Lütfen bitkiyi daha net, iyi ışıkta ve tek karede göstererek tekrar dene.") from exc
+        raise HTTPException(status_code=502, detail="Fotoğraflar gerçek analiz için işlenemedi. Yaprak, bitkinin genel görünümü ve mümkünse toprak/saksı ile tekrar dene.") from exc
+
+
+async def _analyze_with_openai(image_bytes: bytes, mime_type: str) -> PlantDiagnosisResponse:
+    return await _analyze_with_openai_images([(image_bytes, mime_type)])
 
 
 def _notification_content(is_premium: bool, plant_name: str | None) -> tuple[str, str]:
@@ -313,6 +329,18 @@ async def analyze_photo(image: Annotated[UploadFile, File(description="High qual
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Fotoğraf dosyası boş.")
     return await _analyze_with_openai(image_bytes=image_bytes, mime_type=image.content_type or "image/jpeg")
+
+
+@app.post("/ai/analyze-photo-set", response_model=PlantDiagnosisResponse)
+async def analyze_photo_set(images: Annotated[list[UploadFile], File(description="Plant, leaves, pot and soil photos")]) -> PlantDiagnosisResponse:
+    prepared: list[tuple[bytes, str]] = []
+    for image in images[:5]:
+        image_bytes = await image.read()
+        if image_bytes:
+            prepared.append((image_bytes, image.content_type or "image/jpeg"))
+    if not prepared:
+        raise HTTPException(status_code=400, detail="En az bir fotoğraf yüklenmeli.")
+    return await _analyze_with_openai_images(prepared)
 
 
 @app.post("/ai/live-frame", response_model=LiveFrameResponse)
