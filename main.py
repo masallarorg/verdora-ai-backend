@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-app = FastAPI(title="Verdora AI Backend", version="0.9.4-openai-multiphoto")
+app = FastAPI(title="Verdora AI Backend", version="0.9.5-openai-multiphoto")
 
 app.add_middleware(
     CORSMiddleware,
